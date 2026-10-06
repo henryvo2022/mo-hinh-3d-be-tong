@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Tấm panel bê tông lỗ rỗng 4000 × 600 × 200</title>
+<style>
+  :root{
+    --bg:#d6d9dc; --ink:#1c2126; --panel:rgba(248,249,250,.92); --line:#aab1b8;
+    --dim:#1f4fb8; --dim-bg:rgba(255,255,255,.92);
+  }
+  html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--ink);
+    font-family:"Segoe UI",system-ui,-apple-system,Roboto,Arial,sans-serif;}
+  #stage{position:fixed;inset:0;touch-action:none;cursor:grab;}
+  #stage:active{cursor:grabbing}
+  #stage canvas{display:block}
+  #dims{position:fixed;inset:0;pointer-events:none;z-index:2;overflow:visible}
+  #ui{position:fixed;z-index:3;top:calc(12px + env(safe-area-inset-top,0px));left:12px;right:12px;
+    display:flex;flex-wrap:wrap;gap:6px;align-items:center;pointer-events:none}
+  #ui > *{pointer-events:auto}
+  button,select{font:inherit;font-size:13px;padding:7px 12px;border:1px solid var(--line);
+    background:var(--panel);color:var(--ink);border-radius:4px;cursor:pointer}
+  button:hover,select:hover{border-color:#6b737b}
+  button:focus-visible,select:focus-visible{outline:2px solid var(--dim);outline-offset:2px}
+  button.on{background:var(--ink);color:#fff;border-color:var(--ink)}
+  .sep{width:1px;height:24px;background:var(--line);margin:0 4px}
+  #info{position:fixed;z-index:3;left:12px;bottom:calc(12px + env(safe-area-inset-bottom,0px));
+    background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:8px 11px;
+    font-size:12px;line-height:1.55;max-width:min(420px,calc(100% - 24px))}
+  #info b{font-weight:600}
+  #err{position:fixed;inset:0;display:none;align-items:center;justify-content:center;z-index:9;
+    font-size:14px;padding:24px;text-align:center}
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<svg id="dims" xmlns="http://www.w3.org/2000/svg"></svg>
+
+<div id="ui">
+  <button data-view="iso" class="on">Isometric</button>
+  <button data-view="front">Mặt trước</button>
+  <button data-view="top">Mặt trên</button>
+  <button data-view="bottom">Mặt đáy (thấy lỗ)</button>
+  <span class="sep"></span>
+  <button id="btnCut" aria-pressed="false">Cắt lớp</button>
+  <select id="cutPlane" aria-label="Vị trí mặt cắt">
+    <option value="x">Cắt ngang giữa chiều dài (X = 0)</option>
+    <option value="y">Cắt ngang giữa chiều cao (Y = 300)</option>
+    <option value="z">Cắt dọc giữa chiều dày (Z = 0)</option>
+  </select>
+</div>
+
+<div id="info">
+  <b>Tấm panel bê tông lỗ rỗng</b> 4000 × 600 × 200 mm<br>
+  20 lỗ D120, tim-tim 190, bụng 70, vách đầu 135, lỗ mù đến Y = 593<br>
+  Gờ trên / rãnh đáy cao 10 mm, chân 130, vát 45°<br>
+  <span style="color:#d9530f;font-weight:600">Màu cam</span> = thành lỗ D120 (chỉ để phân biệt, không thêm chi tiết)<br>Kéo để xoay, cuộn chuột hoặc chụm 2 ngón để zoom
+</div>
+<div id="err">Không tải được three.js r128 từ cdnjs. Kiểm tra kết nối mạng rồi mở lại file.</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(function(){
+if(typeof THREE==='undefined'){document.getElementById('err').style.display='flex';return;}
+
+/* ================= Số liệu (mm) — 1 đơn vị = 1 mm ================= */
+const L=4000, H=600, T=200;        // dài (X), cao (Y), dày (Z)
+const R=60;                        // lỗ D120
+const P=190, N=20, X0=195;         // tim-tim, số lỗ, tâm lỗ đầu cách mép trái
+const Y_HOLE_TOP=593;              // lỗ mù kết thúc tại Y=593
+const G=10;                        // chiều cao gờ / sâu rãnh
+const WB=130, WT=WB-2*G;           // bề rộng chân 130, vát 45° → đỉnh 110
+const holeX=i=>-L/2+X0+P*i;
+
+/* ================= Renderer / scene ================= */
+const stage=document.getElementById('stage');
+const renderer=new THREE.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
+renderer.shadowMap.enabled=true;
+renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+renderer.localClippingEnabled=true;
+renderer.outputEncoding=THREE.sRGBEncoding;
+stage.appendChild(renderer.domElement);
+
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(0xd6d9dc);
+const camera=new THREE.PerspectiveCamera(35,1,50,60000);
+
+/* ================= Texture bê tông (canvas) ================= */
+function concreteCanvas(blotch){
+  const s=512,c=document.createElement('canvas');c.width=c.height=s;
+  const g=c.getContext('2d');
+  g.fillStyle='#c4c4bf';g.fillRect(0,0,s,s);
+  const wrap=(fn)=>{for(let dx=-1;dx<=1;dx++)for(let dy=-1;dy<=1;dy++)fn(dx*s,dy*s);};
+  if(blotch)for(let k=0;k<40;k++){
+    const x=Math.random()*s,y=Math.random()*s,r=40+Math.random()*90,dark=Math.random()<.5;
+    wrap((ox,oy)=>{const gr=g.createRadialGradient(x+ox,y+oy,0,x+ox,y+oy,r);
+      gr.addColorStop(0,dark?'rgba(90,90,85,0.07)':'rgba(255,255,250,0.07)');gr.addColorStop(1,'rgba(0,0,0,0)');
+      g.fillStyle=gr;g.fillRect(x+ox-r,y+oy-r,2*r,2*r);});
+  }
+  const img=g.getImageData(0,0,s,s),d=img.data;
+  for(let i=0;i<d.length;i+=4){const n=(Math.random()-.5)*22;d[i]+=n;d[i+1]+=n;d[i+2]+=n;}
+  g.putImageData(img,0,0);
+  for(let k=0;k<180;k++){
+    const x=Math.random()*s,y=Math.random()*s,r=0.5+Math.pow(Math.random(),4)*2.6;
+    wrap((ox,oy)=>{
+      g.fillStyle='rgba(70,70,66,0.6)';g.beginPath();g.arc(x+ox,y+oy,r,0,Math.PI*2);g.fill();
+      g.fillStyle='rgba(255,255,255,0.22)';g.beginPath();g.arc(x+ox+r*.35,y+oy+r*.35,r*.45,0,Math.PI*2);g.fill();
+    });
+  }
+  return c;
+}
+const cvMap=concreteCanvas(true), cvBump=concreteCanvas(false);
+function tex(srgb){
+  const t=new THREE.CanvasTexture(srgb?cvMap:cvBump);
+  t.wrapS=t.wrapT=THREE.RepeatWrapping;
+  t.repeat.set(1/450,1/450);           // UV của Extrude/Shape tính theo mm
+  t.anisotropy=renderer.capabilities.getMaxAnisotropy();
+  if(srgb)t.encoding=THREE.sRGBEncoding;
+  return t;
+}
+const concrete=new THREE.MeshStandardMaterial({
+  color:0xffffff,map:tex(true),bumpMap:tex(false),bumpScale:0.5,
+  roughness:0.9,metalness:0,clipShadows:true,clippingPlanes:[],vertexColors:true
+});
+const capMat=new THREE.MeshStandardMaterial({
+  color:0xe9ddc9,map:concrete.map,roughness:0.95,metalness:0,side:THREE.DoubleSide
+});
+
+/* ================= Hình học ================= */
+// Extrude theo +Y: shape vẽ trong (u,v) → thế giới (x=u, z=-v)
+function extrudeY(shape,y0,h){
+  const g=new THREE.ExtrudeGeometry(shape,{depth:h,bevelEnabled:false,curveSegments:48});
+  g.rotateX(-Math.PI/2); g.translate(0,y0,0); return g;
+}
+// Extrude theo +X suốt chiều dài: biên dạng (z,y)
+function extrudeX(pts){
+  const s=new THREE.Shape(pts.map(p=>new THREE.Vector2(p[0],p[1])));
+  const g=new THREE.ExtrudeGeometry(s,{depth:L,bevelEnabled:false});
+  g.rotateY(Math.PI/2); g.translate(-L/2,0,0); return g;
+}
+function rect(){
+  const s=new THREE.Shape();
+  s.moveTo(-L/2,-T/2);s.lineTo(L/2,-T/2);s.lineTo(L/2,T/2);s.lineTo(-L/2,T/2);s.lineTo(-L/2,-T/2);
+  return s;
+}
+function rectWithHoles(){
+  const s=rect();
+  for(let i=0;i<N;i++){const h=new THREE.Path();h.absarc(holeX(i),0,R,0,Math.PI*2,true);s.holes.push(h);}
+  return s;
+}
+
+const panel=new THREE.Group(); scene.add(panel);
+const parts=[];
+function add(geo){
+  if(!geo.getAttribute('color')){
+    const n=geo.getAttribute('position').count;
+    geo.setAttribute('color',new THREE.BufferAttribute(new Float32Array(n*3).fill(1),3));
+  }
+  const m=new THREE.Mesh(geo,concrete);m.castShadow=m.receiveShadow=true;panel.add(m);parts.push(m);return m;}
+
+const HOLE_COL=new THREE.Color(1.0,0.34,0.06);           // cam: chỉ để phân biệt lỗ
+function tintHoleWalls(g){
+  if(g.index)g=g.toNonIndexed();
+  const pos=g.getAttribute('position'),n=pos.count,col=new Float32Array(n*3).fill(1);
+  const onHole=k=>{
+    const x=pos.getX(k),z=pos.getZ(k);
+    const i=Math.max(0,Math.min(N-1,Math.round((x+L/2-X0)/P)));
+    return Math.abs(Math.hypot(x-holeX(i),z)-R)<0.05;
+  };
+  for(let t=0;t<n;t+=3){
+    if(!(onHole(t)&&onHole(t+1)&&onHole(t+2)))continue;
+    const y=[pos.getY(t),pos.getY(t+1),pos.getY(t+2)];
+    if(Math.max(...y)-Math.min(...y)<1)continue;           // bỏ mặt nắp trên/dưới của thân
+    for(let k=t;k<t+3;k++){col[k*3]=HOLE_COL.r;col[k*3+1]=HOLE_COL.g;col[k*3+2]=HOLE_COL.b;}
+  }
+  g.setAttribute('color',new THREE.BufferAttribute(col,3));
+  return g;
+}
+add(tintHoleWalls(extrudeY(rectWithHoles(),G,Y_HOLE_TOP-G)));   // thân có lỗ 10 → 593
+add(extrudeY(rect(),Y_HOLE_TOP,H-Y_HOLE_TOP));          // nắp đặc 593 → 600
+// trần lỗ: đĩa tô màu đặt sát mặt dưới nắp đặc (chỉ là lớp màu, không đổi hình học)
+const holeMat=new THREE.MeshStandardMaterial({color:HOLE_COL,emissive:0xff6a1a,emissiveIntensity:0.32,roughness:0.9,metalness:0,clippingPlanes:[],
+  polygonOffset:true,polygonOffsetFactor:-2,polygonOffsetUnits:-2});
+{ const dg=new THREE.CircleGeometry(R,48); dg.rotateX(Math.PI/2);
+  for(let i=0;i<N;i++){const d=new THREE.Mesh(dg,holeMat);d.position.set(holeX(i),Y_HOLE_TOP-0.5,0);d.receiveShadow=true;panel.add(d);} }
+add(extrudeX([[-WB/2,H],[WB/2,H],[WT/2,H+G],[-WT/2,H+G]]));           // gờ trên
+add(extrudeX([[-T/2,0],[-WB/2,0],[-WT/2,G],[-T/2,G]]));               // dải đáy bên 1
+add(extrudeX([[WB/2,0],[T/2,0],[T/2,G],[WT/2,G]]));                   // dải đáy bên 2
+
+/* ================= Mặt cắt (clipping + nắp mặt cắt) ================= */
+const planes={
+  x:new THREE.Plane(new THREE.Vector3(-1,0,0),0),     // giữ nửa X<0
+  y:new THREE.Plane(new THREE.Vector3(0,-1,0),H/2),   // giữ phần Y<300
+  z:new THREE.Plane(new THREE.Vector3(0,0,-1),0)      // giữ nửa Z<0
+};
+const caps={};
+{ // X = 0 nằm giữa bụng bê tông giữa lỗ 10 và 11 → tiết diện đặc
+  const pr=[[-T/2,0],[-WB/2,0],[-WT/2,G],[WT/2,G],[WB/2,0],[T/2,0],[T/2,H],[WB/2,H],[WT/2,H+G],[-WT/2,H+G],[-WB/2,H],[-T/2,H]];
+  const g=new THREE.ShapeGeometry(new THREE.Shape(pr.map(p=>new THREE.Vector2(p[0],p[1]))));
+  g.rotateY(Math.PI/2); caps.x=new THREE.Mesh(g,capMat);
+}
+{ const g=new THREE.ShapeGeometry(rectWithHoles(),48); g.rotateX(-Math.PI/2); g.translate(0,H/2,0);
+  caps.y=new THREE.Mesh(g,capMat); }
+{ const s=new THREE.Shape(); s.moveTo(-L/2,G);
+  for(let i=0;i<N;i++){const c=holeX(i);s.lineTo(c-R,G);s.lineTo(c-R,Y_HOLE_TOP);s.lineTo(c+R,Y_HOLE_TOP);s.lineTo(c+R,G);}
+  s.lineTo(L/2,G);s.lineTo(L/2,H+G);s.lineTo(-L/2,H+G);s.lineTo(-L/2,G);
+  caps.z=new THREE.Mesh(new THREE.ShapeGeometry(s),capMat); }
+Object.values(caps).forEach(m=>{m.visible=false;m.receiveShadow=true;scene.add(m);});
+
+/* ================= Sàn + ánh sáng ================= */
+const floor=new THREE.Mesh(new THREE.PlaneGeometry(40000,40000),
+  new THREE.ShadowMaterial({opacity:0.22}));
+floor.rotation.x=-Math.PI/2; floor.position.y=-1; floor.receiveShadow=true; scene.add(floor);
+
+scene.add(new THREE.HemisphereLight(0xffffff,0x6f706c,0.42));
+const sun=new THREE.DirectionalLight(0xffffff,0.85);
+sun.position.set(-2600,5200,3600); sun.target.position.set(0,300,0);
+sun.castShadow=true; sun.shadow.mapSize.set(2048,2048);
+Object.assign(sun.shadow.camera,{left:-3400,right:3400,top:3400,bottom:-3400,near:100,far:16000});
+sun.shadow.bias=-0.0004; sun.shadow.normalBias=1.5; sun.shadow.radius=5;
+scene.add(sun,sun.target);
+const fill=new THREE.DirectionalLight(0xffffff,0.4); fill.position.set(1800,-3000,2500); scene.add(fill);
+
+/* ================= Điều khiển xoay / zoom tự viết ================= */
+const target=new THREE.Vector3(0,H/2,0);
+const PH_MIN=0.001, PH_MAX=Math.PI-0.001;
+const cur={th:-Math.PI/4,ph:0.955,r:8000}, goal={...cur};
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const wrapPi=a=>{a=(a+Math.PI)%(2*Math.PI);if(a<0)a+=2*Math.PI;return a-Math.PI;};
+function fitR(){
+  const vf=THREE.MathUtils.degToRad(camera.fov)/2, hf=Math.atan(Math.tan(vf)*camera.aspect);
+  return Math.max(2350/Math.tan(hf),520/Math.tan(vf));
+}
+function setGoal(th,ph,r){goal.th=cur.th+wrapPi(th-cur.th);goal.ph=clamp(ph,PH_MIN,PH_MAX);goal.r=r;}
+
+const ptrs=new Map(); let pinch=0;
+const pd=()=>{const a=[...ptrs.values()];return Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y);};
+stage.addEventListener('pointerdown',e=>{
+  stage.setPointerCapture(e.pointerId); ptrs.set(e.pointerId,{x:e.clientX,y:e.clientY});
+  if(ptrs.size===2)pinch=pd();
+});
+stage.addEventListener('pointermove',e=>{
+  const p=ptrs.get(e.pointerId); if(!p)return;
+  const dx=e.clientX-p.x, dy=e.clientY-p.y; p.x=e.clientX; p.y=e.clientY;
+  if(ptrs.size===1){goal.th-=dx*0.006; goal.ph=clamp(goal.ph-dy*0.006,PH_MIN,PH_MAX);}
+  else if(ptrs.size===2){const d=pd(); if(pinch>0&&d>0)goal.r=clamp(goal.r*pinch/d,300,30000); pinch=d;}
+});
+const up=e=>{ptrs.delete(e.pointerId);pinch=ptrs.size===2?pd():0;};
+stage.addEventListener('pointerup',up); stage.addEventListener('pointercancel',up);
+stage.addEventListener('wheel',e=>{e.preventDefault();goal.r=clamp(goal.r*Math.exp(e.deltaY*0.0012),300,30000);},{passive:false});
+
+/* ================= Nút ================= */
+const viewBtns=[...document.querySelectorAll('[data-view]')];
+function setView(v){
+  const f=fitR();
+  if(v==='iso')   setGoal(-Math.PI/4,0.955,f*1.4);
+  if(v==='front') setGoal(0,Math.PI/2,f*1.02);
+  if(v==='top')   setGoal(0,PH_MIN,f*1.02);
+  if(v==='bottom')setGoal(0,PH_MAX,f*1.02);
+  viewBtns.forEach(b=>b.classList.toggle('on',b.dataset.view===v));
+}
+viewBtns.forEach(b=>b.addEventListener('click',()=>setView(b.dataset.view)));
+
+let cutOn=false, cutKey='x';
+const btnCut=document.getElementById('btnCut'), sel=document.getElementById('cutPlane');
+function applyCut(moveCam){
+  [concrete,holeMat].forEach(m=>{m.clippingPlanes=cutOn?[planes[cutKey]]:[];m.needsUpdate=true;});
+  Object.keys(caps).forEach(k=>caps[k].visible=cutOn&&k===cutKey);
+  btnCut.classList.toggle('on',cutOn); btnCut.setAttribute('aria-pressed',cutOn);
+  if(cutOn&&moveCam){
+    const f=fitR(); viewBtns.forEach(b=>b.classList.remove('on'));
+    if(cutKey==='x')setGoal(Math.PI/3.2,1.05,f*0.8);
+    if(cutKey==='y')setGoal(-Math.PI/5,0.62,f*1.35);
+    if(cutKey==='z')setGoal(0,Math.PI/2,f*1.02);
+  }
+}
+btnCut.addEventListener('click',()=>{cutOn=!cutOn;applyCut(true);});
+sel.addEventListener('change',()=>{cutKey=sel.value;if(cutOn)applyCut(true);});
+
+/* ================= Nhãn kích thước (SVG overlay) ================= */
+const svg=document.getElementById('dims'), NS='http://www.w3.org/2000/svg';
+function dimDefs(){
+  const c0=holeX(0),c1=holeX(1);
+  let hy=G-1,hz=0,py=G-1,pz=T/2-15;                 // mặc định: ở trần rãnh đáy
+  if(cutOn&&cutKey==='y'){hy=H/2+1;py=H/2+1;pz=T/2-15;}
+  if(cutOn&&cutKey==="z"){hy=H/2;hz=-1;py=Y_HOLE_TOP-40;pz=-1;}
+  return [
+    {t:'4000',a:[-L/2,-70,T/2],b:[L/2,-70,T/2]},
+    {t:'600', a:[L/2+70,0,T/2],b:[L/2+70,H,T/2]},
+    {t:'200', a:[-L/2,H+70,-T/2],b:[-L/2,H+70,T/2]},
+    {t:'D120',a:[c0-R,hy,hz],b:[c0+R,hy,hz]},
+    {t:'tim-tim 190',a:[c0,py,pz],b:[c1,py,pz]}
+  ];
+}
+const ray=new THREE.Raycaster(), tmp=new THREE.Vector3(), tmp2=new THREE.Vector3();
+function visible(p){
+  tmp.set(...p); const dist=tmp.distanceTo(camera.position);
+  tmp2.copy(tmp).sub(camera.position).normalize();
+  ray.set(camera.position,tmp2); ray.far=dist-12;
+  const objs=cutOn?parts.concat([caps[cutKey]]):parts;
+  const pl=cutOn?planes[cutKey]:null;
+  for(const h of ray.intersectObjects(objs,false)){
+    if(pl&&h.object!==caps[cutKey]&&pl.distanceToPoint(h.point)<0)continue;
+    return false;
+  }
+  return true;
+}
+function proj(p,w,h){tmp.set(...p).project(camera);
+  return {x:(tmp.x+1)/2*w,y:(1-tmp.y)/2*h,ok:tmp.z>-1&&tmp.z<1};}
+function drawDims(){
+  const w=innerWidth,h=innerHeight; let html='';
+  const pl=cutOn?planes[cutKey]:null;
+  for(const d of dimDefs()){
+    if(pl&&(pl.distanceToPoint(tmp.set(...d.a))<-0.5||pl.distanceToPoint(tmp.set(...d.b))<-0.5))continue;
+    const A=proj(d.a,w,h),B=proj(d.b,w,h); if(!A.ok||!B.ok)continue;
+    const mid=[(d.a[0]+d.b[0])/2,(d.a[1]+d.b[1])/2,(d.a[2]+d.b[2])/2];
+    const op=(visible(d.a)||visible(d.b)||visible(mid))?1:0.22;
+    const len=Math.hypot(B.x-A.x,B.y-A.y)||1, nx=-(B.y-A.y)/len*6, ny=(B.x-A.x)/len*6;
+    const mx=(A.x+B.x)/2,my=(A.y+B.y)/2;
+    html+=`<g opacity="${op}" stroke="#1f4fb8" stroke-width="1.4">
+      <line x1="${A.x}" y1="${A.y}" x2="${B.x}" y2="${B.y}"/>
+      <line x1="${A.x-nx}" y1="${A.y-ny}" x2="${A.x+nx}" y2="${A.y+ny}"/>
+      <line x1="${B.x-nx}" y1="${B.y-ny}" x2="${B.x+nx}" y2="${B.y+ny}"/>
+      <text x="${mx}" y="${my}" dy="-7" text-anchor="middle" font-size="13" font-weight="600"
+        font-family="Segoe UI,system-ui,sans-serif" fill="#1f4fb8" stroke="#fff" stroke-width="3.5"
+        paint-order="stroke">${d.t}</text></g>`;
+  }
+  svg.innerHTML=html;
+}
+
+/* ================= Vòng lặp ================= */
+function resize(){
+  const w=innerWidth,h=innerHeight;
+  renderer.setSize(w,h); camera.aspect=w/h; camera.updateProjectionMatrix();
+  svg.setAttribute('viewBox',`0 0 ${w} ${h}`); svg.setAttribute('width',w); svg.setAttribute('height',h);
+}
+addEventListener('resize',resize); resize();
+cur.r=goal.r=fitR()*1.4;
+
+let last=performance.now();
+function frame(now){
+  const dt=Math.min((now-last)/1000,0.1); last=now;
+  const k=1-Math.exp(-dt*9);
+  cur.th+=(goal.th-cur.th)*k; cur.ph+=(goal.ph-cur.ph)*k; cur.r+=(goal.r-cur.r)*k;
+  const s=Math.sin(cur.ph);
+  camera.position.set(target.x+cur.r*s*Math.sin(cur.th),target.y+cur.r*Math.cos(cur.ph),target.z+cur.r*s*Math.cos(cur.th));
+  camera.lookAt(target);
+  renderer.render(scene,camera);
+  drawDims();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
