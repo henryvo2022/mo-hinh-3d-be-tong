@@ -91,7 +91,7 @@ h2{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--mut)
       <div class="row">
         <button class="btn" id="bX" type="button">Trong suốt</button>
         <button class="btn" id="bC" type="button">Cắt qua lõi</button>
-        <button class="btn on" id="bL" type="button">Chú thích</button>
+        <button class="btn" id="bL" type="button">Chú thích</button>
         <button class="btn" id="bS" type="button">Mẫu ngắn 1000</button>
         <button class="btn" id="bU" type="button">Nhìn mặt dưới bàn</button>
         <button class="btn on" id="bD" type="button">Kích thước</button>
@@ -1407,7 +1407,7 @@ gSling.add(box(mat.beam,-700,700,1300,1380,-40,40));
 gSling.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(-650,1380,0),hook,new THREE.Vector3(650,1380,0)]), mat.sling));
 
 /* ===== Trạng thái theo bước ===== */
-const S = {dims:true, under:false, step:0, xray:false, cut:false, labels:true, short:false, len:L0};
+const S = {dims:true, under:false, step:0, xray:false, cut:false, labels:false, short:false, len:L0};
 const groups = [gPal,gRT,gRG,gEL,gER,gCore,gGuide,gRebar,gAnc,gConc,gSling,gPull];
 function targets(){
   const s = S.step, len = S.len, endX = -L0/2 + len;
